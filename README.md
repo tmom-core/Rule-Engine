@@ -64,6 +64,8 @@ Aggregates multiple RuleBlocks into a **full playbook**. Responsibilities:
 
 A structured dictionary containing the **current market state, account state, and event history**. This is what primitives evaluate against.
 
+Not curently implemented, but the data preprocessing layer should be able to output something like this below.
+
 Example:
 
 ```python
