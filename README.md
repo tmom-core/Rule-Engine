@@ -134,3 +134,20 @@ print(result)  # True/False
 * Implement preprocessing of raw OHLC bars into EvalContext.
 * Implement RuleEngine enforcement actions (ENTRY, DISCIPLINE, RISK, EXIT, OVERRIDES).
 * Integrate LLM direct mapping to automatically populate RuleBlocks from trader instructions.
+* Add a field that marks the priority of each category for the trader
+* finalize the data cleaning pipeline
+* keep buffers of data from api in case of failures (keep functionality atomic)
+* look at custom limits for aws services
+* as time goes on, deactivate rules that are not needed anymore like entry rules
+* instead of making a new instance of the engine when chaning the rules, just change the current one and store what was changed in the database so it can be used during backtesting
+* create system architecture diagram
+* if state is in cooldown, block the trade button and then if the trader clicks on it, there will be anotif saying "are you sure" and then the trader can decide
+* Engine is market agnostic
+* if there is not enough supply for your demand in your limit order, do a partial fill and then if there still is not enough supply after a certain period of time, then just cancel that order
+* test the engine during the market hours and test the engine multiple times to know that it is performing accurately and deterministically
+## Websocket To-Do
+* Add some randomness to the reconnection of the websocket if the websocket fails because everyone is going to try to reconnect to the same socket at once.
+* try to have the least number of websocket connections to binance
+* Look at these best practices and limits: https://www.binance.com/en/academy/articles/what-are-binance-websocket-limits?utm_source=chatgpt.com
+* add a token expiration and a revocation path
+

@@ -2,12 +2,12 @@ from typing import Any, Dict, List, Callable
 from enum import Enum
 
 class RuleCategory(Enum):
-    ENTRY: 1
-    PROCESS: 2
-    RISK: 3
-    DISCIPLINE: 3
-    EXIT: 4
-    OVERRIDES: 5
+    ENTRY = 1
+    PROCESS = 2
+    RISK = 3
+    DISCIPLINE = 3
+    EXIT = 4
+    OVERRIDES = 5
 
 class Primitive:
     def __init__ (self, name: str, evaluator: Callable[..., bool]):
