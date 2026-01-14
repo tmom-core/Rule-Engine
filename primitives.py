@@ -12,8 +12,6 @@ def comparison_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> boo
     right = params['right']
     op = params['op']
 
-    print(left, op, right)  # Debug print
-
     if op == '>':
         return left > right
     elif op == '<':
@@ -33,7 +31,6 @@ def set_membership_evaluator(params: Dict[str, Any], context: Dict[str, Any]) ->
     allowed = params.get('allowed', [])
     forbidden = params.get('forbidden', [])
 
-    print(f"Value: {value}, Allowed: {allowed}, Forbidden: {forbidden}")  # Debug print
     if allowed and value not in allowed:
         return False
     if forbidden and value in forbidden:
@@ -101,7 +98,6 @@ def temporal_gate_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> 
     start = params.get('start_time')
     end = params.get('end_time')
 
-    print(f"Current time: {current_time}, Start: {start}, End: {end}")  # Debug print
     if start and end:
         return start <= current_time <= end
 
@@ -110,3 +106,39 @@ def temporal_gate_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> 
         return current_time >= cooldown_end
 
     return True
+
+def account_comparison_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> bool:
+    """
+    Evaluates a comparison against a broker account field.
+
+    Example params:
+    {
+        "field": "buying_power",
+        "op": ">=",
+        "value": 50000
+    }
+
+    Requires that `context` contains an "account" dict with the relevant field.
+    """
+    account = context.get("account", {})
+    field = params["field"]
+    op = params["op"]
+    value = float(params["value"])
+
+    if field not in account:
+        raise ValueError(f"Account field '{field}' not available in context")
+
+    account_value = float(account[field])
+
+    if op == ">":
+        return account_value > value
+    elif op == ">=":
+        return account_value >= value
+    elif op == "<":
+        return account_value < value
+    elif op == "<=":
+        return account_value <= value
+    elif op == "==":
+        return account_value == value
+    else:
+        raise ValueError(f"Unknown operator '{op}' in account_comparison")

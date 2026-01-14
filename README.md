@@ -121,6 +121,9 @@ print(result)  # True/False
 
 ---
 
+## Current Flow
+![alt text](image.png)
+
 ## Notes
 
 * The system assumes that raw market data (OHLC bars) is preprocessed into an **EvalContext** containing derived metrics and event history.
