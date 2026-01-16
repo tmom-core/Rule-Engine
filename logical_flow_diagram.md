@@ -85,6 +85,10 @@ Communicates decisions, warnings, and explanations to the user in real time or p
 - **Constraint Resolver**
     - Constraints are likely evaluated ad hoc.
     - No formal logic layer that combines primitive results into rule-level decisions.
+    - There are multiple sources of constraints and this constrain resolver will tell us in which gives precedence.
+    - For example, BLOCK > MODIFY > ALLOW.
+    - Given all rules and modes, which one takes precedence.
 - **FSM / State Resolver**
     - Stateful enforcement (cooldowns, repeated violations, escalation) is not implemented.
     - No explicit state machine driving rule transitions over time.
+    - What is the last known state and what to do from there.
