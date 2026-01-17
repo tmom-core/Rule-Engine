@@ -12,7 +12,6 @@ class AlpacaAccountProvider:
     """
 
     def __init__(self, api_key: str = None, api_secret: str = None, paper: bool = True):
-        # Use .env if keys not provided
         self.api_key = api_key or os.getenv("API_KEY")
         self.api_secret = api_secret or os.getenv("SECRET_KEY")
         self.client = TradingClient(self.api_key, self.api_secret, paper=paper)
@@ -24,7 +23,6 @@ class AlpacaAccountProvider:
         """
         account = self.client.get_account()
 
-        # Convert the Alpaca Account object to dict if needed
         account_dict = account.__dict__
 
         if fields:
@@ -32,4 +30,5 @@ class AlpacaAccountProvider:
         else:
             snapshot = account_dict
 
+        print("snapshot", snapshot)
         return snapshot
