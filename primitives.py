@@ -1,5 +1,25 @@
 # primitives.py
 from typing import Dict, Any
+from datetime import datetime
+
+def parse_time_to_seconds(time_val: Any) -> float:
+    """
+    Converts a time value (int seconds or ISO string) to seconds since midnight.
+    Format: YYYY-MM-DDTHH:MM:SS.mmmZ
+    """
+    if isinstance(time_val, (int, float)):
+        return float(time_val)
+    
+    if isinstance(time_val, str):
+        try:
+            # Handle Z suffix
+            clean_val = time_val.replace('Z', '+00:00')
+            dt = datetime.fromisoformat(clean_val)
+            seconds = dt.hour * 3600 + dt.minute * 60 + dt.second + dt.microsecond / 1e6
+            return seconds
+        except ValueError:
+            pass
+    return 0.0
 
 # ---------------------------
 # Core Primitive Evaluators
@@ -48,10 +68,19 @@ def rate_limit_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> boo
     window_minutes = params['window_minutes']
 
     history = context.get('history', {}).get(metric, [])  # list of timestamps
-    current_time = context.get('current_time')
+    current_time_val = context.get('current_time')
+    
+    current_seconds = parse_time_to_seconds(current_time_val)
 
-    count_in_window = sum(1 for t in history if current_time - t <= window_minutes * 60)
-    return count_in_window <= max_count
+    # Assuming history items are compatible (also ISO or seconds)
+    # We count how many t are within window
+    count = 0
+    for t in history:
+        t_seconds = parse_time_to_seconds(t)
+        if current_seconds - t_seconds <= window_minutes * 60:
+            count += 1
+            
+    return count <= max_count
 
 
 def accumulation_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> bool:
@@ -86,8 +115,16 @@ def sequence_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> bool:
 
     events = context.get('event_history', [])
     if window_minutes:
-        current_time = context.get('current_time')
-        events = [(t, e) for t, e in events if current_time - t <= window_minutes * 60]
+        current_time_val = context.get('current_time')
+        current_seconds = parse_time_to_seconds(current_time_val)
+        
+        # Filter events by window
+        filtered_events = []
+        for t, e in events:
+            t_seconds = parse_time_to_seconds(t)
+            if current_seconds - t_seconds <= window_minutes * 60:
+                filtered_events.append((t, e))
+        events = filtered_events
 
     events_only = [e for _, e in events]
     pattern_index = 0
@@ -103,17 +140,18 @@ def sequence_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> bool:
 
 def temporal_gate_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> bool:
     """Evaluates if current time is within allowed window or past a cooldown."""
-    current_time = context.get('current_time')
+    current_time_val = context.get('current_time')
+    current_seconds = parse_time_to_seconds(current_time_val)
 
     start = params.get('start_time')
     end = params.get('end_time')
 
     if start and end:
-        return start <= current_time <= end
+        return start <= current_seconds <= end
 
     cooldown_end = params.get('cooldown_end')
     if cooldown_end:
-        return current_time >= cooldown_end
+        return current_seconds >= cooldown_end
 
     return True
 

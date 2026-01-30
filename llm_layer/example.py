@@ -128,7 +128,7 @@ class MockMarketDataProvider:
                 snapshot[metric] = 0 # Default safety
         
         # Always add time
-        snapshot["current_time"] = 10 * 3600 
+        snapshot["current_time"] = "2026-01-30T14:32:18.123Z"
         return snapshot
 
 # Initialize Market Provider
@@ -140,15 +140,18 @@ class MockUserActionProvider:
         Returns timestamped history for requested metrics.
         """
         history = {}
-        current_time = 10 * 3600 # 10:00 AM
+        # current_time is "2026-01-30T14:32:18.123Z" (approx 14:32)
+        # 14:32 = 14*3600 + 32*60 + 18 = 52338
+        
+        # We need past ISO times for trades.
+        # Let's say trades happened at 14:00, 14:15, 14:25
         
         for metric in metrics:
             if metric == "trades":
-                # Mock: 3 trades executed closely before 10 AM
                 history["trades"] = [
-                    current_time - 1800, # 9:30 AM
-                    current_time - 900,  # 9:45 AM
-                    current_time - 300   # 9:55 AM
+                    "2026-01-30T14:00:00.000Z",
+                    "2026-01-30T14:15:00.000Z",
+                    "2026-01-30T14:25:00.000Z"
                 ]
             else:
                 history[metric] = []
@@ -193,5 +196,17 @@ pprint.pprint(full_context)
 # -----------------------------
 print("\n[STEP 3] Rule Evaluation")
 can_enter = rule_block.evaluate(full_context)
-print(f"  -> Evaluating RuleBlock against Context...")
-print(f"  -> RESULT: {can_enter}")
+print(f"  -> RuleBlock Evaluation Result: {can_enter}")
+
+# Final Result Packet
+result_packet = {
+    "rule": user_rule,
+    "result": can_enter,
+    "timestamp": full_context.get("current_time"),
+    "symbol": full_context.get("symbol")
+}
+
+print("\n-----------------------------")
+print("FINAL OUTPUT:")
+pprint.pprint(result_packet)
+print("-----------------------------")
