@@ -109,9 +109,9 @@ Available primitives:
 CONTEXT SKELETON (DATA REQUIREMENTS)
 --------------------
 You must explicitly list all data required to evaluate the rule.
+- "symbol": The trading pair or ticker symbol if specified (e.g. "BTC/USD", "AAPL").
 - "market_data": List specific market indicators needed (e.g. "rsi", "sma_50", "close"). Prefer the user's exact term (e.g. "price") if it refers to valid market data.
 - "account_fields": List account fields used in the rule (must match primitives).
-- "time_required": boolean, true if time-based primitives or logic are used.
 - "history_metrics": List historical metrics if rate limits or accumulation are used.
 
 --------------------
@@ -156,9 +156,9 @@ Output:
     "conditions": {{"all": ["rsi_ok", "time_ok", "bp_ok"]}}
   }},
   "context_skeleton": {{
+    "symbol": "BTC",
     "market_data": ["rsi"],
     "account_fields": ["buying_power"],
-    "time_required": true,
     "history_metrics": []
   }}
 }}

@@ -86,13 +86,13 @@ alpaca_provider = AlpacaAccountProvider(
 # -----------------------------
 # Initialize LLM client + parser
 # -----------------------------
-llm_client = OpenAILLMClient(model="gpt-4.1")  # Replace with your key
+llm_client = OpenAILLMClient(model="gpt-4.1")
 parser = RuleParser(llm_client, category=RuleCategory.ENTRY)
 
 # -----------------------------
 # User input rule
 # -----------------------------
-user_rule = "Buy if the price is below 85,000"
+user_rule = "Buy BTC if the price is below 85,000"
 
 # Parse user input
 print(f"USER RULE: '{user_rule}'")
@@ -103,7 +103,6 @@ print(f"  -> Generated Skeleton:")
 print(f"     Context Skeleton: {context_skeleton.model_dump_json(indent=2)}")
 print(f"     Market Data:    {context_skeleton.market_data}")
 print(f"     Account Fields: {context_skeleton.account_fields}")
-print(f"     Time Required:  {context_skeleton.time_required}")
 
 # -----------------------------
 # Mock Data Providers

@@ -25,9 +25,9 @@ class RuleSkeletonSchema(BaseModel):
 
 
 class ContextSkeletonSchema(BaseModel):
+    symbol: Optional[str] = None
     market_data: List[str] = []
     account_fields: List[str] = []
-    time_required: bool = False
     history_metrics: List[str] = []
 
 

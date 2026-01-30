@@ -107,6 +107,10 @@ class ContextBuilder:
         
         context = dict(base_context)
         
+        # 0. Symbol
+        if context_skeleton and context_skeleton.symbol:
+            context["symbol"] = context_skeleton.symbol
+        
         # 1. Account Data
         if all_fields:
             account_snapshot = self.account_provider.get_snapshot(list(all_fields))
@@ -146,6 +150,7 @@ class RuleBlock:
         2. Evaluates all extensions.
         3. Applies boolean logic (ALL/ANY/NONE) to extension results.
         """
+        print(f"    [INTERNAL ENGINE] Evaluating with context keys: {list(context.keys())}")
         account = context.get("account")
         if account:
             conflicts = validate_account_for_playbook(account)
