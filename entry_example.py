@@ -73,11 +73,12 @@ alpaca_provider = AlpacaAccountProvider(
 # Context hydration
 # -----------------------------
 # Collect all primitives for required account fields
-primitives = [ext.primitive for ext in rule_block.extensions.values()]
+# Collect all primitives for required account fields
+extensions = list(rule_block.extensions.values())
 global_account_fields = ["pattern_day_trader", "daytrade_count", "trading_blocked", "trade_suspended_by_user"]
 
 context_builder = ContextBuilder(alpaca_provider, global_account_fields=global_account_fields)
-full_context = context_builder.hydrate(base_context=market_context, primitives=primitives)
+full_context = context_builder.hydrate(base_context=market_context, extensions=extensions)
 
 print("Hydrated context with market + account data:")
 print(full_context["account"])

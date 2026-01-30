@@ -23,7 +23,16 @@ class RuleSkeletonSchema(BaseModel):
     conditions: Optional[ConditionsSchema] = None
 
 
+
+class ContextSkeletonSchema(BaseModel):
+    market_data: List[str] = []
+    account_fields: List[str] = []
+    time_required: bool = False
+    history_metrics: List[str] = []
+
+
 class LLMResponseSchema(BaseModel):
     status: Status
     rule: Optional[RuleSkeletonSchema] = Field(default=None)
+    context_skeleton: Optional[ContextSkeletonSchema] = Field(default=None)
     reason: Optional[str] = None

@@ -1,6 +1,7 @@
 # example.py
 import sys
 import os
+import pprint
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine import ContextBuilder, Primitive, PrimitiveRegistry
@@ -91,24 +92,82 @@ parser = RuleParser(llm_client, category=RuleCategory.ENTRY)
 # -----------------------------
 # User input rule
 # -----------------------------
-user_rule = "Prevent entries if my buying power is below $50,000 or my cash is less than $10,000."
+user_rule = "Buy if the price is below 85,000"
 
-# Parse user input into a RuleBlock
-rule_block = parser.parse(user_rule)
+# Parse user input
+print(f"USER RULE: '{user_rule}'")
+print("\n[STEP 1] LLM Parsing & Context Skeleton Creation")
+rule_block, context_skeleton = parser.parse(user_rule)
+
+print(f"  -> Generated Skeleton:")
+print(f"     Context Skeleton: {context_skeleton.model_dump_json(indent=2)}")
+print(f"     Market Data:    {context_skeleton.market_data}")
+print(f"     Account Fields: {context_skeleton.account_fields}")
+print(f"     Time Required:  {context_skeleton.time_required}")
 
 # -----------------------------
-# Market context
+# Mock Data Providers
 # -----------------------------
-market_context = {
-    "rsi": ohlcv['rsi'].iloc[-1],
-    "current_time": 10 * 3600  # 10:00 AM in seconds
-}
+class MockMarketDataProvider:
+    def __init__(self, data_source: pd.DataFrame):
+        self.data = data_source
+
+    def fetch_data(self, required_metrics: list) -> dict:
+        """
+        Fetch only the metrics requested by the Context Skeleton.
+        """
+        snapshot = {}
+        latest_row = self.data.iloc[-1]
+        
+        for metric in required_metrics:
+            if metric in latest_row:
+                snapshot[metric] = latest_row[metric]
+            elif metric == "price": # Common alias
+                snapshot["price"] = latest_row["close"]
+            else:
+                print(f"WARNING: Market data metric '{metric}' not found.")
+                snapshot[metric] = 0 # Default safety
+        
+        # Always add time
+        snapshot["current_time"] = 10 * 3600 
+        return snapshot
+
+# Initialize Market Provider
+market_provider = MockMarketDataProvider(ohlcv)
+
+class MockUserActionProvider:
+    def get_history(self, metrics: list) -> dict:
+        """
+        Returns timestamped history for requested metrics.
+        """
+        history = {}
+        current_time = 10 * 3600 # 10:00 AM
+        
+        for metric in metrics:
+            if metric == "trades":
+                # Mock: 3 trades executed closely before 10 AM
+                history["trades"] = [
+                    current_time - 1800, # 9:30 AM
+                    current_time - 900,  # 9:45 AM
+                    current_time - 300   # 9:55 AM
+                ]
+            else:
+                history[metric] = []
+        return history
+
+user_action_provider = MockUserActionProvider()
 
 # -----------------------------
 # Context hydration
 # -----------------------------
-# Collect all primitives from the rule block
-primitives = [ext.primitive for ext in rule_block.extensions.values()]
+print("\n[STEP 2] Context Hydration (Filling the Skeleton)")
+# 1. Get Market Data
+market_metrics = context_skeleton.market_data
+market_context = market_provider.fetch_data(market_metrics)
+print(f"  -> Fetched Market Data: {market_context}")
+
+# 2. Get Account Data
+# Define globals (usually config)
 global_account_fields = [
     "trading_blocked",
     "trade_suspended_by_user",
@@ -118,18 +177,22 @@ global_account_fields = [
     "cash"
 ]
 
-context_builder = ContextBuilder(alpaca_provider, global_account_fields=global_account_fields)
-extensions = list(rule_block.extensions.values())
-full_context = context_builder.hydrate(base_context=market_context, extensions=extensions)
+context_builder = ContextBuilder(
+    account_provider=alpaca_provider, 
+    user_action_provider=user_action_provider,
+    global_account_fields=global_account_fields
+)
+full_context = context_builder.hydrate(base_context=market_context, context_skeleton=context_skeleton)
 
+print(f"  -> Fetched Account Data: {full_context.get('account', {})}")
+print(f"  -> Final Populated Context:")
+pprint.pprint(full_context)
 
-print("Hydrated context with market + account data:")
-print(full_context["account"])
 
 # -----------------------------
 # Rule evaluation
 # -----------------------------
-print("RSI value:", market_context["rsi"])
-
+print("\n[STEP 3] Rule Evaluation")
 can_enter = rule_block.evaluate(full_context)
-print("Can enter trade:", can_enter)
+print(f"  -> Evaluating RuleBlock against Context...")
+print(f"  -> RESULT: {can_enter}")

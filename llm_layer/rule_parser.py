@@ -7,11 +7,16 @@ from engine import RuleBlock, RuleCategory, Extension
 from prompts import build_system_prompt
 
 class RuleParser:
+    """
+    Handles conversation with LLM to convert natural language rules 
+    into structured RuleBlocks and Context Skeletons.
+    """
     def __init__(self, llm_client, category: RuleCategory = RuleCategory.ENTRY, max_repairs: int = 2):
         """
-        llm_client: your OpenAI / LLM wrapper
-        category: the RuleCategory to assign to all parsed rules
-        max_repairs: how many times to ask LLM to repair invalid JSON
+        Args:
+            llm_client: Wrapper for LLM interactions.
+            category: The default RuleCategory for parsed rules.
+            max_repairs: Max attempts to fix invalid JSON output from LLM.
         """
         self.llm = llm_client
         self.category = category
@@ -23,7 +28,7 @@ class RuleParser:
         Parse user input into a RuleBlock ready for engine evaluation.
         """
         full_prompt = self.system_prompt + "\n\nUser input:\n" + user_input
-        print(full_prompt)
+        # print(full_prompt)
         raw = self.llm.generate(self.system_prompt, user_input)
         llm_response = self._validate_with_repair(raw)
 
@@ -31,8 +36,9 @@ class RuleParser:
             raise ValueError(f"Cannot parse rule: {llm_response.reason or 'LLM needs clarification'}")
 
         skeleton_dict = llm_response.rule.dict()
-        print("skeleton dict: ", json.dumps(skeleton_dict, indent=2))
-        return RuleBlock(category=self.category, skeleton=skeleton_dict)
+        context_skeleton = llm_response.context_skeleton
+        
+        return RuleBlock(category=self.category, skeleton=skeleton_dict), context_skeleton
 
     def _validate_with_repair(self, raw: str) -> LLMResponseSchema:
         """
@@ -80,5 +86,6 @@ Return ONLY valid JSON matching schema:
 - top-level 'status': 'ok' | 'needs_clarification' | 'unsupported'
 - optional 'reason'
 - 'rule': {{ "extensions": [{{'id', 'primitive', 'params'}}], "conditions": {{'all', 'any', 'none'}} }}
+- 'context_skeleton': {{ "market_data": [], "account_fields": [], "time_required": bool, "history_metrics": [] }}
 """
                 )
