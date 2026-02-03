@@ -5,6 +5,7 @@ from typing import Optional
 from schemas import LLMResponseSchema, RuleSkeletonSchema
 from engine import RuleBlock, RuleCategory, Extension
 from prompts import build_system_prompt
+import pprint
 
 class RuleParser:
     """
@@ -36,6 +37,7 @@ class RuleParser:
             raise ValueError(f"Cannot parse rule: {llm_response.reason or 'LLM needs clarification'}")
 
         skeleton_dict = llm_response.rule.dict()
+        pprint.pprint(skeleton_dict)
         context_skeleton = llm_response.context_skeleton
         
         return RuleBlock(category=self.category, skeleton=skeleton_dict), context_skeleton
