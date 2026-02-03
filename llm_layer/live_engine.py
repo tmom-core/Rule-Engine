@@ -6,6 +6,7 @@ import asyncio
 import json
 import pandas as pd
 from typing import Dict, Any
+from aiohttp import web
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -164,6 +165,20 @@ async def run_market_engine(
 # -----------------------------
 # Main Setup
 # -----------------------------
+async def handle_health(request):
+    return web.Response(text="OK")
+
+async def start_health_server():
+    app = web.Application()
+    app.add_routes([web.get('/', handle_health), web.get('/health', handle_health)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f" [HEALTH] Listening on port {port}")
+    return runner
+
 async def main():
     # 1. Hardware/Provider Setup
     alpaca_provider = AlpacaAccountProvider(
@@ -201,6 +216,10 @@ async def main():
 
     # Create tasks
     print("Starting listeners...")
+    
+    # Start Health Server
+    health_runner = await start_health_server()
+    
     task_user = asyncio.create_task(user_ws.listen(user_activity_handler))
     task_market = asyncio.create_task(run_market_engine(
         market_ws_url, 
@@ -211,7 +230,10 @@ async def main():
     ))
 
     # Keep alive
-    await asyncio.gather(task_user, task_market)
+    try:
+        await asyncio.gather(task_user, task_market)
+    finally:
+        await health_runner.cleanup()
 
 if __name__ == "__main__":
     try:
