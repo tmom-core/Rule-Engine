@@ -2,11 +2,11 @@ import asyncio
 import sys
 import json
 import pandas as pd
-from llm_layer.data_ingestion import WebSocketIngestion
+from llm_layer.data_ingestion import WebSocketClient
 
 async def test_client(url):
     print(f"Client: Connecting to {url}...")
-    client = WebSocketIngestion(url)
+    client = WebSocketClient(url)
     
     received_data = []
     

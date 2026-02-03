@@ -19,7 +19,7 @@ from primitives import (
 from account_providers import AlpacaAccountProvider
 from rule_parser import RuleParser
 from llm_layer.openai_client import OpenAILLMClient
-from llm_layer.data_ingestion import WebSocketIngestion
+from llm_layer.data_ingestion import WebSocketClient
 from dotenv import load_dotenv
 
 load_dotenv("../.env")
@@ -90,19 +90,13 @@ async def run_market_engine(
     context_builder: ContextBuilder,
     context_skeleton: Any
 ):
-    client = WebSocketIngestion(ws_url)
-    result_client = WebSocketIngestion(result_ws_url)
+    client = WebSocketClient(ws_url)
+    result_client = WebSocketClient(result_ws_url)
 
     print(f" [MARKET] Connecting to {ws_url}...")
     print(f" [RESULT] connecting to {result_ws_url}...")
 
-    # We need to manage the result connection manually since listen() is a loop for receiving
-    # But here we want to send. So we connect once using the underlying method if possible,
-    # or better yet, we just start another connect task?
-    # Actually, WebSocketIngestion is designed for reading. Let's make a quick sender helper directly here
-    # or reuse the class if it exposes the connection.
-    # The class sets self.connection.
-    
+    # Establish result connection early
     await result_client.connect()
     
     async def market_handler(msg: str):
@@ -155,12 +149,11 @@ async def run_market_engine(
                 f"DEVIATION: {str(deviation)}"
             )
             
-            # Stream to WebSocket
-            if result_client.connection:
-                try:
-                    await result_client.connection.send(json.dumps(output_payload))
-                except Exception as send_err:
-                    print(f" [RESULT STREAM ERROR] {send_err}")
+            # Stream to WebSocket using the new send method
+            try:
+                await result_client.send(output_payload)
+            except Exception as send_err:
+                print(f" [RESULT STREAM ERROR] {send_err}")
 
         except Exception as e:
             print(f" [MARKET ENGINE ERROR] {e}")
@@ -202,9 +195,9 @@ async def main():
     # 3. Start Websockets
     user_ws_url = "wss://tmom-app-backend.onrender.com/ws/user-activity"
     market_ws_url = "wss://tmom-app-backend.onrender.com/ws/market-state"
-    result_ws_url = "wss://tmom-app-backend.onrender.com/ws/engine-output"
+    result_ws_url = "wss://rule-engine-rcg9.onrender.com/ws/engine-output"
 
-    user_ws = WebSocketIngestion(user_ws_url)
+    user_ws = WebSocketClient(user_ws_url)
 
     # Create tasks
     print("Starting listeners...")
