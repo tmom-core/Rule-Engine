@@ -66,7 +66,8 @@ class WebSocketClient:
         
         while True:
             try:
-                if not self.connection or self.connection.closed:
+                # connect() handles its own retry logic for initial connection
+                if not self.connection:
                     print(f"Connecting to {self.url}...")
                     await self.connect()
                 
@@ -74,16 +75,17 @@ class WebSocketClient:
                 async for message in self.connection:
                     await callback(message)
                 
-                # If async for finishes without exception, it means the connection closed normally
-                # or we broke out of it. If we want to stay connected, treat it as a disconnect.
-                close_code = getattr(self.connection, 'close_code', 'unknown')
-                close_reason = getattr(self.connection, 'close_reason', 'unknown')
-                print(f"Connection closed by server (code: {close_code}, reason: {close_reason}). Reconnecting...")
+                # If we get here, the server closed the connection cleanly (or we broke out)
+                print("Connection closed by server. Reconnecting...")
+                # Force reconnection next loop
+                self.connection = None
                 
             except websockets.exceptions.ConnectionClosed as e:
                 print(f"Connection closed (code: {e.code}, reason: {e.reason}). Reconnecting in {base_delay}s...")
+                self.connection = None
             except Exception as e:
                 print(f"Error while listening: {e}. Reconnecting in {base_delay}s...")
+                self.connection = None
             
             # Wait before reconnecting to avoid spamming
             await asyncio.sleep(base_delay)
