@@ -4,14 +4,6 @@ import websockets.exceptions
 import json
 from typing import Callable, Awaitable, Union
 
-'''
-```
-export APCA_API_KEY_ID=PKSUH6PMI2OZ6U3JMWTT6YKLHM
-export APCA_API_SECRET_KEY=GvUT8fmiGQXHwC25empMJhe6o3L3pVLo6CjYT5LsAALa
-export APCA_BASE_URL=https://paper-api.alpaca.markets
-```
-'''
-
 class WebSocketClient:
     def __init__(self, url: str):
         self.url = url
@@ -68,17 +60,30 @@ class WebSocketClient:
     async def listen(self, callback: Callable[[str], Awaitable[None]]):
         """
         Listens for messages and calls the callback for each message.
+        Automatically reconnects if the connection is dropped.
         """
-        if not self.connection:
-            await self.connect()
+        base_delay = 5.0
         
-        try:
-            async for message in self.connection:
-                await callback(message)
-        except websockets.exceptions.ConnectionClosed:
-            print("Connection closed")
-        except Exception as e:
-            print(f"Error while listening: {e}")
-        finally:
-            if self.connection:
-                await self.connection.close()
+        while True:
+            try:
+                if not self.connection or self.connection.closed:
+                    print(f"Connecting to {self.url}...")
+                    await self.connect()
+                
+                print(f"Listening on {self.url}...")
+                async for message in self.connection:
+                    await callback(message)
+                
+                # If async for finishes without exception, it means the connection closed normally
+                # or we broke out of it. If we want to stay connected, treat it as a disconnect.
+                close_code = getattr(self.connection, 'close_code', 'unknown')
+                close_reason = getattr(self.connection, 'close_reason', 'unknown')
+                print(f"Connection closed by server (code: {close_code}, reason: {close_reason}). Reconnecting...")
+                
+            except websockets.exceptions.ConnectionClosed as e:
+                print(f"Connection closed (code: {e.code}, reason: {e.reason}). Reconnecting in {base_delay}s...")
+            except Exception as e:
+                print(f"Error while listening: {e}. Reconnecting in {base_delay}s...")
+            
+            # Wait before reconnecting to avoid spamming
+            await asyncio.sleep(base_delay)
