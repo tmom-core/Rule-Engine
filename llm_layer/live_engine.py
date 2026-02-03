@@ -75,6 +75,7 @@ async def user_activity_handler(msg: str):
     Listens for user activity on the websocket.
     Any message received here counts as a 'user action' for the current interval.
     """
+    print(f" [USER RAW MSG] {msg}")
     try:
         data = json.loads(msg)
         # In a real scenario, we might check data['alpaca_event_type'] == 'fill' or similar.
