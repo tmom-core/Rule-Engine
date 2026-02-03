@@ -5,8 +5,8 @@ import pprint
 import asyncio
 import json
 import pandas as pd
-from typing import Dict, Any
-from aiohttp import web
+from typing import Dict, Any, Set
+from aiohttp import web, WSMsgType
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -63,6 +63,9 @@ class EngineState:
 
 state = EngineState()
 
+# Global set of connected clients for result broadcasting
+connected_clients: Set[web.WebSocketResponse] = set()
+
 # -----------------------------
 # WebSocket Handlers
 # -----------------------------
@@ -86,19 +89,15 @@ async def user_activity_handler(msg: str):
 
 async def run_market_engine(
     ws_url: str,
-    result_ws_url: str,
+    # result_ws_url removed as we now broadcast
     rule_block: RuleBlock,
     context_builder: ContextBuilder,
     context_skeleton: Any
 ):
     client = WebSocketClient(ws_url)
-    result_client = WebSocketClient(result_ws_url)
-
+    
     print(f" [MARKET] Connecting to {ws_url}...")
-    print(f" [RESULT] connecting to {result_ws_url}...")
-
-    # Establish result connection early
-    await result_client.connect()
+    # No longer connecting to result_ws_url explicitly
     
     async def market_handler(msg: str):
         try:
@@ -150,12 +149,16 @@ async def run_market_engine(
                 f"DEVIATION: {str(deviation)}"
             )
             
-            # Stream to WebSocket using the new send method
-            try:
-                await result_client.send(output_payload)
-            except Exception as send_err:
-                print(f" [RESULT STREAM ERROR] {send_err}")
-
+            # Broadcast to all connected WebSocket clients
+            if connected_clients:
+                # Iterate over a copy to avoid modification issues during iteration
+                for ws in list(connected_clients):
+                    try:
+                        await ws.send_json(output_payload)
+                    except Exception as send_err:
+                        print(f" [RESULT STREAM ERROR] {send_err}")
+                        # Clean up dead connections lazily or rely on the handler's finally block
+                        
         except Exception as e:
             print(f" [MARKET ENGINE ERROR] {e}")
 
@@ -168,15 +171,39 @@ async def run_market_engine(
 async def handle_health(request):
     return web.Response(text="OK")
 
-async def start_health_server():
+async def websocket_handler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    
+    print(" [WEBSOCKET] Client connected")
+    connected_clients.add(ws)
+    
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                # Optional: Handle incoming messages from clients if needed
+                pass
+            elif msg.type == WSMsgType.ERROR:
+                print(f" [WEBSOCKET] Connection closed with exception {ws.exception()}")
+    finally:
+        connected_clients.remove(ws)
+        print(" [WEBSOCKET] Client disconnected")
+    
+    return ws
+
+async def start_web_server():
     app = web.Application()
-    app.add_routes([web.get('/', handle_health), web.get('/health', handle_health)])
+    app.add_routes([
+        web.get('/', handle_health),
+        web.get('/health', handle_health),
+        web.get('/ws/engine-output', websocket_handler)
+    ])
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    print(f" [HEALTH] Listening on port {port}")
+    print(f" [SERVER] Listening on port {port}")
     return runner
 
 async def main():
@@ -210,20 +237,19 @@ async def main():
     # 3. Start Websockets
     user_ws_url = "wss://tmom-app-backend.onrender.com/ws/user-activity"
     market_ws_url = "wss://tmom-app-backend.onrender.com/ws/market-state"
-    result_ws_url = "wss://rule-engine-rcg9.onrender.com/ws/engine-output"
+    # Result URL is now hosted locally
 
     user_ws = WebSocketClient(user_ws_url)
 
     # Create tasks
     print("Starting listeners...")
     
-    # Start Health Server
-    health_runner = await start_health_server()
+    # Start Web Server (Health + WebSocket)
+    web_runner = await start_web_server()
     
     task_user = asyncio.create_task(user_ws.listen(user_activity_handler))
     task_market = asyncio.create_task(run_market_engine(
         market_ws_url, 
-        result_ws_url,
         rule_block, 
         context_builder, 
         context_skeleton
@@ -233,7 +259,7 @@ async def main():
     try:
         await asyncio.gather(task_user, task_market)
     finally:
-        await health_runner.cleanup()
+        await web_runner.cleanup()
 
 if __name__ == "__main__":
     try:
