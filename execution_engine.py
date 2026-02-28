@@ -7,10 +7,39 @@ from dotenv import load_dotenv
 
 from broker.account_providers import AlpacaAccountProvider
 from network.websocket_client import WebSocketClient
-from engine import Playbook, RuleCategory, ContextBuilder
+from engine import Playbook, RuleCategory, ContextBuilder, Primitive, PrimitiveRegistry
+from primitives import (
+    comparison_evaluator,
+    temporal_gate_evaluator,
+    account_comparison_evaluator,
+    set_membership_evaluator,
+    rate_limit_evaluator,
+    accumulation_evaluator,
+    sequence_evaluator,
+)
 from llm_layer.schemas import ContextSkeletonSchema
 from llm_layer.openai_client import OpenAILLMClient
 from llm_layer.rule_parser import RuleParser
+
+# Register Primitives
+def register_primitives():
+    print("registering primitives")
+    if "comparison" not in PrimitiveRegistry._registry:
+        PrimitiveRegistry.register(Primitive("comparison", comparison_evaluator, required_context=["price"]))
+    if "temporal_gate" not in PrimitiveRegistry._registry:
+        PrimitiveRegistry.register(Primitive("temporal_gate", temporal_gate_evaluator, required_context=["current_time"]))
+    if "account_comparison" not in PrimitiveRegistry._registry:
+        PrimitiveRegistry.register(Primitive("account_comparison", account_comparison_evaluator))
+    if "set_membership" not in PrimitiveRegistry._registry:
+        PrimitiveRegistry.register(Primitive("set_membership", set_membership_evaluator))
+    if "rate_limit" not in PrimitiveRegistry._registry:
+        PrimitiveRegistry.register(Primitive("rate_limit", rate_limit_evaluator))
+    if "accumulation" not in PrimitiveRegistry._registry:
+        PrimitiveRegistry.register(Primitive("accumulation", accumulation_evaluator))
+    if "sequence" not in PrimitiveRegistry._registry:
+        PrimitiveRegistry.register(Primitive("sequence", sequence_evaluator))
+
+register_primitives()
 
 # Load environment variables
 load_dotenv(".env")
@@ -189,7 +218,8 @@ async def process_new_playbook(user_id: str, playbook_id: str, clients_set: Set[
                 if patch_resp.status in (200, 201, 204):
                     print("[ENGINE] Successfully patched Context Skeleton to database.")
                 else:
-                    print(f"[ENGINE WARNING] Failed to patch context. Status: {patch_resp.status}")
+                    err_text = await patch_resp.text()
+                    print(f"[ENGINE WARNING] Failed to patch context. Status: {patch_resp.status}, Response: {err_text}")
         except Exception as e:
             print(f"[ENGINE WARNING] Could not patch Supabase: {e}")
 
