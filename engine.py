@@ -1,7 +1,7 @@
 # engine.py
 from typing import Any, Dict, List, Callable
 from enum import Enum
-from account_validation import validate_account_for_playbook
+from broker.account_validation import validate_account_for_playbook
 
 
 class RuleCategory(Enum):
@@ -9,9 +9,9 @@ class RuleCategory(Enum):
     ENTRY = 1
     PROCESS = 2
     RISK = 3
-    DISCIPLINE = 3
-    EXIT = 4
-    OVERRIDES = 5
+    DISCIPLINE = 4
+    EXIT = 5
+    OVERRIDES = 6
 
 
 class Primitive:
@@ -97,7 +97,6 @@ class ContextBuilder:
 
         if context_skeleton:
             dynamic_account_fields.update(context_skeleton.account_fields)
-            history_metrics = context_skeleton.history_metrics
         elif extensions:
             for ext in extensions:
                 if "field" in ext.params:
@@ -115,13 +114,6 @@ class ContextBuilder:
         if all_fields:
             account_snapshot = self.account_provider.get_snapshot(list(all_fields))
             context["account"] = account_snapshot
-            
-        # 2. History / User Actions
-        if self.user_action_provider and history_metrics:
-            history_context = self.user_action_provider.get_history(history_metrics)
-            # Merge into a top-level 'history' key or however primitives expect it
-            # primitives.py expects context.get('history', {}).get(metric, [])
-            context["history"] = history_context
 
         return context
 
@@ -132,9 +124,10 @@ class RuleBlock:
     that functions as a complete, evaluatable rule.
     """
     def __init__(self, category: RuleCategory, skeleton: Dict[str, Any]):
+        self.name = skeleton.get("name", "Unnamed Rule")
         self.category = category
         self.extensions: Dict[str, Extension] = {}
-        self.conditions: Dict[str, List[str]] = skeleton.get("conditions", {})
+        self.conditions: Dict[str, Any] = skeleton.get("conditions", {})
         self._load_extensions(skeleton.get("extensions", []))
 
     def _load_extensions(self, extensions: List[Dict[str, Any]]):
@@ -143,12 +136,33 @@ class RuleBlock:
             extension = Extension(ext["primitive"], ext["params"], ext["id"])
             self.extensions[extension.id] = extension
 
+    def _evaluate_recursive(self, node: Any, results: Dict[str, bool]) -> bool:
+        """Recursively evaluates a condition node (can be an Extension ID or a Conditions dictionary)."""
+        if isinstance(node, str):
+            return results.get(node, False)
+        
+        if not isinstance(node, dict):
+            return False
+
+        all_nodes = node.get("all", [])
+        any_nodes = node.get("any", [])
+        none_nodes = node.get("none", [])
+
+        if all_nodes and not all(self._evaluate_recursive(n, results) for n in all_nodes):
+            return False
+        if any_nodes and not any(self._evaluate_recursive(n, results) for n in any_nodes):
+            return False
+        if none_nodes and any(self._evaluate_recursive(n, results) for n in none_nodes):
+            return False
+
+        return True
+
     def evaluate(self, context: Dict[str, Any]) -> bool:
         """
         Evaluates the entire rule block.
         1. Checks global account safety constraints.
         2. Evaluates all extensions.
-        3. Applies boolean logic (ALL/ANY/NONE) to extension results.
+        3. Recursively applies boolean logic (ALL/ANY/NONE) to extension results.
         """
         print(f"    [INTERNAL ENGINE] Evaluating with context keys: {list(context.keys())}")
         account = context.get("account")
@@ -158,20 +172,11 @@ class RuleBlock:
                 print("ACCOUNT CONFLICTS DETECTED:", conflicts)
                 return False
 
+        # Evaluate all extensions present in the block first
         results = {eid: ext.evaluate(context) for eid, ext in self.extensions.items()}
 
-        all_ids = self.conditions.get("all", [])
-        any_ids = self.conditions.get("any", [])
-        none_ids = self.conditions.get("none", [])
-
-        if all_ids and not all(results[eid] for eid in all_ids):
-            return False
-        if any_ids and not any(results[eid] for eid in any_ids):
-            return False
-        if none_ids and any(results[eid] for eid in none_ids):
-            return False
-
-        return True
+        # Recursively evaluate the conditions tree
+        return self._evaluate_recursive(self.conditions, results)
 
 
 class RuleConflictChecker:
@@ -208,3 +213,33 @@ class RuleConflictChecker:
         for ext in rule_block.extensions.values():
             all_conflicts.extend(self.check_conflict(ext))
         return all_conflicts
+
+
+class Playbook:
+    """
+    A collection of RuleBlocks that represents a complete trading strategy.
+    Aggregates results from multiple rule categories (ENTRY, RISK, EXIT, etc.).
+    """
+    def __init__(self, name: str = "Default Playbook"):
+        self.name = name
+        self.rules: List[RuleBlock] = []
+
+    def add_rule(self, rule: RuleBlock):
+        self.rules.append(rule)
+
+    def evaluate(self, context: Dict[str, Any]) -> Dict[RuleCategory, List[str]]:
+        """Evaluates all rules in the playbook and returns a list of triggered rule names by category."""
+        results = {}
+        for rule in self.rules:
+            if rule.category not in results:
+                results[rule.category] = []
+            
+            # If the rule evaluates to True, record its name
+            if rule.evaluate(context):
+                results[rule.category].append(rule.name)
+                
+        return results
+
+    def get_rules_by_category(self, category: RuleCategory) -> List[RuleBlock]:
+        return [r for r in self.rules if r.category == category]
+

@@ -33,6 +33,55 @@ def comparison_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> boo
     left = context.get(params['left'], 0)
     right = params['right']
     op = params['op']
+    
+    # If right is a string, it might be a reference or arithmetic expression (e.g. "VWAP + 1.5 * ATR_14")
+    if isinstance(right, str):
+        if right in context:
+            right = context[right]
+        else:
+            # Check if it's an arithmetic expression we need to evaluate safely
+            import re
+            
+            # Simple check if there's any math operator in the string
+            if any(char in right for char in ['+', '-', '*', '/']):
+                # Find all potential variable names (words/identifiers) in the string
+                # Regex matches alphanumeric strings including underscores
+                vars_in_expr = set(re.findall(r'[a-zA-Z_]\w*', right))
+                
+                expr = right
+                can_evaluate = True
+                
+                for var in vars_in_expr:
+                    if var in context:
+                        # Substitute the variable securely with its numeric value
+                        val = context[var]
+                        expr = expr.replace(var, str(val))
+                    else:
+                        # Missing a required variable to compute the math
+                        can_evaluate = False
+                        break
+                        
+                if can_evaluate:
+                    try:
+                        # Safely evaluate simple math expressions
+                        # Only allow math structures (no builtins/functions) execution
+                        right = eval(expr, {"__builtins__": None}, {})
+                    except Exception as e:
+                        pass # Keep right as original string if eval fails
+
+    # Safely try to cast string numbers (like "100000" from Alpaca) to floats
+    # Only try to cast if it's a string avoiding 'bool' or 'None' conversion bugs
+    try:
+        if isinstance(left, str):
+            left = float(left)
+        if isinstance(right, str):
+            right = float(right)
+    except ValueError:
+        pass # If it's a literal string like "VWAP_14" that didn't exist in context, we leave it.
+
+    if type(left) != type(right):
+        print(f" [EVALUATOR WARNING] Type mismatch: {type(left)} vs {type(right)} -> {left} {op} {right}")
+        return False
 
     if op == '>':
         return left > right

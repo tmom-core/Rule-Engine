@@ -23,7 +23,8 @@ class AlpacaAccountProvider:
         """
         account = self.client.get_account()
 
-        account_dict = account.__dict__
+        # account_dict = account.__dict__
+        account_dict = dict(account)
 
         if fields:
             snapshot = {k: account_dict.get(k) for k in fields}

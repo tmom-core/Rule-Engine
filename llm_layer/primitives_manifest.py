@@ -1,5 +1,5 @@
 # primitives_manifest.py
-from prompts import ACCOUNT_FIELDS
+from llm_layer.prompts import ACCOUNT_FIELDS
 
 PRIMITIVE_MANIFEST = {
     "comparison": {

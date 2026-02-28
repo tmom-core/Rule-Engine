@@ -1,15 +1,16 @@
-from llm_client import LLMClient
+from llm_layer.llm_client import LLMClient
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 
 load_dotenv("../.env")
 class OpenAILLMClient(LLMClient):
-    def __init__(self, model: str = "gpt-4.1"):
+    def __init__(self, model: str = "gpt-4o"):
         self.client = OpenAI(api_key=os.getenv("OPENAI_KEY"))
         self.model = model
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
+
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[

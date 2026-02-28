@@ -2,9 +2,9 @@
 import json
 import uuid
 from typing import Optional
-from schemas import LLMResponseSchema, RuleSkeletonSchema
+from llm_layer.schemas import LLMResponseSchema, RuleSkeletonSchema
 from engine import RuleBlock, RuleCategory, Extension
-from prompts import build_system_prompt
+from llm_layer.prompts import build_system_prompt
 import pprint
 
 class RuleParser:
@@ -24,25 +24,38 @@ class RuleParser:
         self.max_repairs = max_repairs
         self.system_prompt = build_system_prompt()
 
-    def parse(self, user_input: str) -> RuleBlock:
+    def parse(self, user_input: str) -> 'Playbook':
         """
-        Parse user input into a RuleBlock ready for engine evaluation.
+        Parse user input into a Playbook containing multiple RuleBlocks.
         """
-        full_prompt = self.system_prompt + "\n\nUser input:\n" + user_input
-        # print(full_prompt)
+        from engine import Playbook
+        print(f"\n--- CALLING LLM WITH INPUT ---\n{user_input[:200]}...")
         raw = self.llm.generate(self.system_prompt, user_input)
-        llm_response = self._validate_with_repair(raw)
+        print(f"\n--- LLM RAW RESPONSE ---\n{raw}")
+        llm_response = self._validate_with_repair(raw, user_input)
 
         if llm_response.status != "ok":
-            raise ValueError(f"Cannot parse rule: {llm_response.reason or 'LLM needs clarification'}")
+            raise ValueError(f"Cannot parse playbook: {llm_response.reason or 'LLM needs clarification'}")
 
-        skeleton_dict = llm_response.rule.dict()
-        pprint.pprint(skeleton_dict)
+        from engine import Playbook, RuleCategory
+        playbook = Playbook()
+        for rule_skeleton in llm_response.rules:
+            # Cast string category from LLM to Engine Enum
+            category_enum = RuleCategory[rule_skeleton.category]
+            
+            skeleton_dict = rule_skeleton.dict()
+            print(f"\n--- DERIVED RULE SKELETON ({rule_skeleton.category}) ---")
+            pprint.pprint(skeleton_dict)
+            rule_block = RuleBlock(category=category_enum, skeleton=skeleton_dict)
+            playbook.add_rule(rule_block)
+
+        
         context_skeleton = llm_response.context_skeleton
         
-        return RuleBlock(category=self.category, skeleton=skeleton_dict), context_skeleton
+        return playbook, context_skeleton
 
-    def _validate_with_repair(self, raw: str) -> LLMResponseSchema:
+
+    def _validate_with_repair(self, raw: str, user_input: str) -> LLMResponseSchema:
         """
         Validate raw JSON from LLM and attempt repair if invalid.
         """
@@ -51,15 +64,20 @@ class RuleParser:
                 parsed = json.loads(raw)
 
                 # Normalize missing optional fields
-                if "rule" not in parsed:
-                    parsed["rule"] = None
+                if "rules" not in parsed:
+                    parsed["rules"] = []
                 if "reason" not in parsed:
                     parsed["reason"] = None
 
+                # Handle legacy 'rule' key if present
+                if "rule" in parsed and parsed["rule"] is not None:
+                    parsed["rules"].append(parsed["rule"])
+
                 # Wrap flat output into rule skeleton if needed
-                if parsed.get("rule") is None and "primitive" in parsed:
+                if not parsed.get("rules") and "primitive" in parsed:
                     ext_id = parsed.get("id") or f"ext_{uuid.uuid4().hex[:8]}"
-                    parsed["rule"] = {
+                    parsed["rules"].append({
+                        "category": self.category.name if hasattr(self.category, 'name') else self.category,
                         "extensions": [
                             {
                                 "id": ext_id,
@@ -68,7 +86,7 @@ class RuleParser:
                             }
                         ],
                         "conditions": {"all": [ext_id]}
-                    }
+                    })
 
                 return LLMResponseSchema.model_validate(parsed)
 
@@ -77,12 +95,16 @@ class RuleParser:
                     raise ValueError(f"LLM output invalid after repair: {e}")
 
                 # Ask LLM to repair
-                raw = self.llm.generate(self.system_prompt,
-                    f"""
+                print(f"\n--- REPAIR ATTEMPT {attempt + 1} ---")
+                repair_prompt = f"""
+Original User Input:
+{user_input}
+
 Previous output failed validation.
 
 Error:
 {str(e)}
+
 
 Return ONLY valid JSON matching schema:
 - top-level 'status': 'ok' | 'needs_clarification' | 'unsupported'
@@ -90,4 +112,5 @@ Return ONLY valid JSON matching schema:
 - 'rule': {{ "extensions": [{{'id', 'primitive', 'params'}}], "conditions": {{'all', 'any', 'none'}} }}
 - 'context_skeleton': {{ "market_data": [], "account_fields": [], "time_required": bool, "history_metrics": [] }}
 """
-                )
+                raw = self.llm.generate(self.system_prompt, repair_prompt)
+                print(f"\n--- REPAIR RESPONSE ---\n{raw}")

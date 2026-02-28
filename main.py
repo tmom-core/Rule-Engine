@@ -8,9 +8,7 @@ import pandas as pd
 from typing import Dict, Any, Set
 from aiohttp import web, WSMsgType
 
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+# main.py runs from the project root.
 from engine import ContextBuilder, Primitive, PrimitiveRegistry, RuleBlock, RuleCategory
 from primitives import (
     comparison_evaluator,
@@ -21,14 +19,14 @@ from primitives import (
     accumulation_evaluator,
     sequence_evaluator
 )
-from account_providers import AlpacaAccountProvider
-from account_validation import GLOBAL_ACCOUNT_FIELDS
-from rule_parser import RuleParser
+from broker.account_providers import AlpacaAccountProvider
+from broker.account_validation import GLOBAL_ACCOUNT_FIELDS
+from llm_layer.rule_parser import RuleParser
 from llm_layer.openai_client import OpenAILLMClient
-from llm_layer.data_ingestion import WebSocketClient
+from network.websocket_client import WebSocketClient
 from dotenv import load_dotenv
 
-load_dotenv("../.env")
+load_dotenv(".env")
 
 # -----------------------------
 # Configuration & Registries
@@ -126,15 +124,25 @@ async def run_market_engine(
     
     print(f" [MARKET] Connecting to {ws_url}...")
     
-    # Send subscription for TA-lib metrics
-    if context_skeleton.ta_lib_metrics:
-        sub_msg = {
-            "action": "subscribe",
-            "symbol": context_skeleton.symbol,
-            "ta_lib_metrics": [m.model_dump() for m in context_skeleton.ta_lib_metrics]
-        }
-        await client.send(sub_msg)
-        print(f" [MARKET] Requested TA-Lib metrics: {[m.name for m in context_skeleton.ta_lib_metrics]}")
+    # Instead of sending the context over the WebSocket,
+    # we POST it to our local API Server which will sync it with the database.
+    skeleton_dict = dict(context_skeleton) if not hasattr(context_skeleton, "model_dump") else context_skeleton.model_dump()
+    
+    import aiohttp
+    async with aiohttp.ClientSession() as session:
+        try:
+            api_url = f"http://localhost:{os.getenv('API_PORT', 8081)}/api/rules/context"
+            async with session.post(
+                api_url, 
+                json={"context": skeleton_dict},
+                headers={"accept": "application/json"}
+            ) as api_resp:
+                if api_resp.status == 200:
+                    print(f" [MARKET] Successfully sent Context Skeleton to API Server for database sync.")
+                else:
+                    print(f" [MARKET WARNING] API Server responded with {api_resp.status}")
+        except Exception as e:
+            print(f" [MARKET WARNING] Could not reach local API Server: {e}")
     
     async def market_handler(msg: str):
         try:

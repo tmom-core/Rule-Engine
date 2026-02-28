@@ -122,7 +122,7 @@ print(result)  # True/False
 ---
 
 ## Current Flow
-![alt text](image.png)
+![alt text](figures/image.png)
 
 ## Notes
 
