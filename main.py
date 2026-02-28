@@ -1,6 +1,7 @@
 import os
 import asyncio
-from aiohttp import web, WSMsgType
+import uvicorn
+from fastapi import FastAPI, BackgroundTasks, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
 
 load_dotenv(".env")
@@ -8,36 +9,39 @@ load_dotenv(".env")
 # Import execution engine logic
 from execution_engine import process_new_playbook, connected_clients
 
-# -----------------------------
-# Configuration & Registries
-# -----------------------------
+# Initialize FastAPI app
+app = FastAPI(title="Rule Engine Orchestrator")
 
-
-
-# -----------------------------
-# Shared State
 # Keep track of active background WebSocket tasks so we can cancel them
 # if the frontend triggers a new rule.
 active_trading_tasks = []
 
-async def handle_health(request):
-    """Simple health check endpoint."""
-    return web.json_response({"status": "healthy", "service": "rule-engine-orchestrator"})
 
-async def trigger_playbook(request):
+@app.get("/")
+@app.get("/health")
+async def handle_health():
+    """Simple health check endpoint."""
+    return {"status": "healthy", "service": "rule-engine-orchestrator"}
+
+
+async def run_in_background(user_id: str, playbook_id: str):
+    """Wrapper to run the playbook flow and capture the background tasks."""
+    global active_trading_tasks
+    tasks = await process_new_playbook(user_id, playbook_id, connected_clients)
+    if tasks:
+        active_trading_tasks.extend(tasks)
+
+
+@app.get("/api/rules/trigger")
+async def trigger_playbook(user_id: str, playbook_id: str, background_tasks: BackgroundTasks):
     """
     GET /api/rules/trigger?user_id=123&playbook_id=abc
     Triggered by the frontend when a user saves a new rule to the database.
     """
-    user_id = request.query.get("user_id")
-    playbook_id = request.query.get("playbook_id")
-
     if not user_id or not playbook_id:
-        return web.json_response({
-            "error": "Missing 'user_id' or 'playbook_id' in query parameters."
-        }, status=400)
+        return {"error": "Missing 'user_id' or 'playbook_id' in query parameters."}
 
-    print(f" [API] Received Trigger for User: {user_id} | Playbook: {playbook_id}")
+    print(f" \n[API] Received Trigger for User: {user_id} | Playbook: {playbook_id}")
 
     # Cancel any existing market engine tasks so we don't have conflicting rules trading
     global active_trading_tasks
@@ -48,72 +52,44 @@ async def trigger_playbook(request):
         active_trading_tasks.clear()
 
     # Launch the new playbook execution flow in the background
-    # This task fetches from DB -> parses -> patches DB -> pings frontend -> starts WS trading
-    async def run_in_background():
-        tasks = await process_new_playbook(user_id, playbook_id, connected_clients)
-        if tasks:
-            active_trading_tasks.extend(tasks)
-            
-    # Fire and forget
-    asyncio.create_task(run_in_background())
+    background_tasks.add_task(run_in_background, user_id, playbook_id)
 
     # Immediately respond to frontend so they aren't blocked waiting for LLM parsing
-    return web.json_response({
+    return {
         "status": "success",
         "message": "Engine triggered. Fetching and applying playbook in the background."
-    })
+    }
 
-async def websocket_handler(request):
+
+@app.websocket("/ws/engine-output")
+async def websocket_handler(websocket: WebSocket):
     """
     WS /ws/engine-output
     Local Websocket endpoint so the frontend (or local GUI) can connect to this engine
     and watch the evaluation logs stream in real-time.
     """
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
-    
+    await websocket.accept()
     print(" [WEBSOCKET] Engine Result Viewer Connected")
-    connected_clients.add(ws)
+    connected_clients.add(websocket)
     
     try:
-        async for msg in ws:
-            if msg.type == WSMsgType.TEXT:
-                pass
-            elif msg.type == WSMsgType.ERROR:
-                print(f" [WEBSOCKET] Connection closed with exception {ws.exception()}")
-    finally:
-        connected_clients.remove(ws)
+        while True:
+            # We don't strictly expect messages from the viewer, but we must await
+            # receive_text to keep the connection alive and catch disconnects natively.
+            _ = await websocket.receive_text()
+    except WebSocketDisconnect:
         print(" [WEBSOCKET] Engine Result Viewer Disconnected")
-    
-    return ws
+    except Exception as e:
+        print(f" [WEBSOCKET] Connection closed with exception {e}")
+    finally:
+        if websocket in connected_clients:
+            connected_clients.remove(websocket)
 
-def setup_routes(app: web.Application):
-    app.router.add_get('/', handle_health)
-    app.router.add_get('/health', handle_health)
-    app.router.add_get('/api/rules/trigger', trigger_playbook)
-    app.router.add_get('/ws/engine-output', websocket_handler)
-
-async def start_web_server():
-    """Initializes and runs the web server."""
-    app = web.Application()
-    setup_routes(app)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    
-    print(f" [SERVER] Starting Orchestrator API on port {port}...")
-    await site.start()
-    
-    # Keep the event loop running forever
-    while True:
-        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8080))
+    print(f" [SERVER] Starting FastAPI Orchestrator on port {port}...")
     try:
-        asyncio.run(start_web_server())
+        uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
     except KeyboardInterrupt:
-        print(" Engine Orchestrator stopped.")
-        print("\nEngine stopped.")
+        print("\nEngine Orchestrator stopped.")
