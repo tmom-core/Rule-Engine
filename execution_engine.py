@@ -152,7 +152,7 @@ async def process_new_playbook(user_id: str, playbook_id: str, clients_set: Set[
             async with session.get(fetch_url, headers={"accept": "application/json"}) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    prompt_text = data.get("prompt") or data.get("rule_text", "")
+                    prompt_text = data.get("original_nl_input") or data.get("rule_text", "")
                     print(f"[ENGINE] Successfully fetched prompt ({len(prompt_text)} chars).")
                 else:
                     print(f"[ENGINE ERROR] Failed to fetch playbook from Supabase. Status: {resp.status}")
