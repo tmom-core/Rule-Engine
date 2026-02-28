@@ -194,14 +194,16 @@ async def process_new_playbook(user_id: str, playbook_id: str, clients_set: Set[
             print(f"[ENGINE WARNING] Could not patch Supabase: {e}")
 
     # 4. Notify frontend's setup stream endpoint
-    # (Using a placeholder URL until the user provides the final one)
-    notify_url = "https://tmom-app-backend.onrender.com/setup-stream-placeholder"
+    notify_url = "https://tmom-app-backend.onrender.com/start_streams_creation"
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(
                 notify_url,
                 json={"user_id": user_id, "playbook_id": playbook_id},
-                headers={"accept": "application/json"}
+                headers={
+                    "accept": "application/json",
+                    "Content-Type": "application/json"
+                }
             ) as notify_resp:
                 print(f"[ENGINE] Notified frontend setup stream. Status: {notify_resp.status}")
         except Exception as e:
