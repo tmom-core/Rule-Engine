@@ -1,403 +1,119 @@
-# llm_layer/live_engine.py
-import sys
 import os
-import pprint
 import asyncio
-import json
-import pandas as pd
-from typing import Dict, Any, Set
 from aiohttp import web, WSMsgType
-
-# main.py runs from the project root.
-from engine import ContextBuilder, Primitive, PrimitiveRegistry, RuleBlock, RuleCategory
-from primitives import (
-    comparison_evaluator,
-    temporal_gate_evaluator,
-    account_comparison_evaluator,
-    set_membership_evaluator,
-    rate_limit_evaluator,
-    accumulation_evaluator,
-    sequence_evaluator
-)
-from broker.account_providers import AlpacaAccountProvider
-from broker.account_validation import GLOBAL_ACCOUNT_FIELDS
-from llm_layer.rule_parser import RuleParser
-from llm_layer.openai_client import OpenAILLMClient
-from network.websocket_client import WebSocketClient
 from dotenv import load_dotenv
 
 load_dotenv(".env")
+
+# Import execution engine logic
+from execution_engine import process_new_playbook, connected_clients
 
 # -----------------------------
 # Configuration & Registries
 # -----------------------------
 
-# Register Primitives (subset needed for the example)
-if "comparison" not in PrimitiveRegistry._registry:
-    PrimitiveRegistry.register(
-        Primitive("comparison", comparison_evaluator, required_context=["price"])
-    )
-if "temporal_gate" not in PrimitiveRegistry._registry:
-    PrimitiveRegistry.register(
-        Primitive("temporal_gate", temporal_gate_evaluator, required_context=["current_time"])
-    )
-if "account_comparison" not in PrimitiveRegistry._registry:
-    PrimitiveRegistry.register(
-        Primitive("account_comparison", account_comparison_evaluator)
-    )
-if "set_membership" not in PrimitiveRegistry._registry:
-    PrimitiveRegistry.register(
-        Primitive("set_membership", set_membership_evaluator)
-    )
-if "rate_limit" not in PrimitiveRegistry._registry:
-    PrimitiveRegistry.register(
-        Primitive("rate_limit", rate_limit_evaluator)
-    )
-if "accumulation" not in PrimitiveRegistry._registry:
-    PrimitiveRegistry.register(
-        Primitive("accumulation", accumulation_evaluator)
-    )
-if "sequence" not in PrimitiveRegistry._registry:
-    PrimitiveRegistry.register(
-        Primitive("sequence", sequence_evaluator)
-    )
+
 
 # -----------------------------
 # Shared State
-# -----------------------------
-class EngineState:
-    def __init__(self):
-        self.user_has_acted = False
-        self.lock = asyncio.Lock()
+# Keep track of active background WebSocket tasks so we can cancel them
+# if the frontend triggers a new rule.
+active_trading_tasks = []
 
-    async def set_user_action(self, acted: bool):
-        async with self.lock:
-            self.user_has_acted = acted
-    
-    async def get_and_reset_user_action(self) -> bool:
-        async with self.lock:
-            acted = self.user_has_acted
-            self.user_has_acted = False  # Reset after reading
-            return acted
-
-state = EngineState()
-
-# Global set of connected clients for result broadcasting
-connected_clients: Set[web.WebSocketResponse] = set()
-
-# -----------------------------
-# WebSocket Handlers
-# -----------------------------
-
-async def user_activity_handler(msg: str):
-    """
-    Listens for user activity on the websocket.
-    Any message received here counts as a 'user action' for the current interval.
-    """
-    print(f" [USER RAW MSG] {msg}")
-    try:
-        data = json.loads(msg)
-        # In a real scenario, we might check data['alpaca_event_type'] == 'fill' or similar.
-        # For now, per instructions: "when a user action does come true"
-        # We assume availability of this message implies an action occurred.
-        print(f" [USER ACTION RECEIVED] {data.get('activity_id', 'unknown_id')}")
-        await state.set_user_action(True)
-    except json.JSONDecodeError:
-        print(f" [USER ACTION ERROR] Invalid JSON: {msg[:50]}...")
-    except Exception as e:
-        print(f" [USER ACTION ERROR] {e}")
-
-async def run_market_engine(
-    ws_url: str,
-    playbook: Any,
-    context_builder: ContextBuilder,
-    context_skeleton: Any
-):
-    print("\n--- FRONTEND CONTEXT REQUEST SKELETON ---")
-    if hasattr(context_skeleton, "model_dump_json"):
-        print(context_skeleton.model_dump_json(indent=2))
-    else:
-        print(json.dumps(dict(context_skeleton), indent=2))
-    print("-----------------------------------------\n")
-
-    client = WebSocketClient(ws_url)
-    
-    print(f" [MARKET] Connecting to {ws_url}...")
-    
-    # Instead of sending the context over the WebSocket,
-    # we POST it to our local API Server which will sync it with the database.
-    skeleton_dict = dict(context_skeleton) if not hasattr(context_skeleton, "model_dump") else context_skeleton.model_dump()
-    
-    import aiohttp
-    async with aiohttp.ClientSession() as session:
-        try:
-            api_url = f"http://localhost:{os.getenv('API_PORT', 8081)}/api/rules/context"
-            async with session.post(
-                api_url, 
-                json={"context": skeleton_dict},
-                headers={"accept": "application/json"}
-            ) as api_resp:
-                if api_resp.status == 200:
-                    print(f" [MARKET] Successfully sent Context Skeleton to API Server for database sync.")
-                else:
-                    print(f" [MARKET WARNING] API Server responded with {api_resp.status}")
-        except Exception as e:
-            print(f" [MARKET WARNING] Could not reach local API Server: {e}")
-    
-    async def market_handler(msg: str):
-        try:
-            data = json.loads(msg)
-            
-            # 1. Build Base Context from Market Data
-            market_context = {}
-            if "price" in data:
-                market_context["price"] = data["price"]
-            if "current_time" in data:
-                market_context["current_time"] = data["current_time"]
-            if "symbol" in data:
-                market_context["symbol"] = data["symbol"]
-            
-            # Retrieve injected TA-Lib metrics from the data stream and add to base context
-            if context_skeleton.ta_lib_metrics:
-                for metric in context_skeleton.ta_lib_metrics:
-                    # Construct matching key constraint used by parser e.g., 'RSI_14' or 'MACD'
-                    key = f"{metric.name}_{metric.timeperiod}" if metric.timeperiod else metric.name
-                    if key in data:
-                        market_context[key] = data[key]
-
-            # 2. Hydrate Full Context (fetches account data if needed)
-            full_context = context_builder.hydrate(
-                base_context=market_context, 
-                context_skeleton=context_skeleton
-            )
-
-            # 3. Evaluate Playbook
-            # playbook_results returns Dict[RuleCategory, List[str]]
-            playbook_results = playbook.evaluate(full_context)
-            
-            # Since we only really care about the simulation of Entry for this loop
-            entry_triggers = playbook_results.get(RuleCategory.ENTRY, [])
-            rule_result = len(entry_triggers) > 0
-
-            # 4. Get and Reset User Action State
-            # This captures if the user acted since the last evaluation
-            user_action_bool = await state.get_and_reset_user_action()
-
-            # 5. Calculate Deviation
-            # True if they disagree (Rule says True vs User False, or Rule False vs User True)
-            # False if they agree
-            deviation = rule_result != user_action_bool
-
-            # 6. Output Result
-            output_payload = {
-                "timestamp": market_context.get("current_time"),
-                "price": market_context.get("price"),
-                "rule_triggered": rule_result,
-                "triggered_entries": entry_triggers,
-                "action": user_action_bool,
-                "deviation": deviation
-            }
-            
-            # Print to console
-            print(
-                f"TIME: {output_payload['timestamp']} | "
-                f"PRICE: {output_payload['price']:<8} | "
-                f"RULE: {str(rule_result):<5} | "
-                f"TRIGGERS: {entry_triggers} | "
-                f"ACTION: {str(user_action_bool):<5} | "
-                f"DEVIATION: {str(deviation)}"
-            )
-            
-            # Broadcast to all connected WebSocket clients
-            if connected_clients:
-                # Iterate over a copy to avoid modification issues during iteration
-                for ws in list(connected_clients):
-                    try:
-                        await ws.send_json(output_payload)
-                    except Exception as send_err:
-                        print(f" [RESULT STREAM ERROR] {send_err}")
-                        # Clean up dead connections lazily or rely on the handler's finally block
-                        
-        except Exception as e:
-            print(f" [MARKET ENGINE ERROR] {e}")
-
-    await client.listen(market_handler)
-
-
-# -----------------------------
-# Main Setup
-# -----------------------------
 async def handle_health(request):
-    return web.Response(text="OK")
+    """Simple health check endpoint."""
+    return web.json_response({"status": "healthy", "service": "rule-engine-orchestrator"})
+
+async def trigger_playbook(request):
+    """
+    GET /api/rules/trigger?user_id=123&playbook_id=abc
+    Triggered by the frontend when a user saves a new rule to the database.
+    """
+    user_id = request.query.get("user_id")
+    playbook_id = request.query.get("playbook_id")
+
+    if not user_id or not playbook_id:
+        return web.json_response({
+            "error": "Missing 'user_id' or 'playbook_id' in query parameters."
+        }, status=400)
+
+    print(f" [API] Received Trigger for User: {user_id} | Playbook: {playbook_id}")
+
+    # Cancel any existing market engine tasks so we don't have conflicting rules trading
+    global active_trading_tasks
+    if active_trading_tasks:
+        print(f" [API] Cancelling {len(active_trading_tasks)} previously active engine tasks...")
+        for task in active_trading_tasks:
+            task.cancel()
+        active_trading_tasks.clear()
+
+    # Launch the new playbook execution flow in the background
+    # This task fetches from DB -> parses -> patches DB -> pings frontend -> starts WS trading
+    async def run_in_background():
+        tasks = await process_new_playbook(user_id, playbook_id, connected_clients)
+        if tasks:
+            active_trading_tasks.extend(tasks)
+            
+    # Fire and forget
+    asyncio.create_task(run_in_background())
+
+    # Immediately respond to frontend so they aren't blocked waiting for LLM parsing
+    return web.json_response({
+        "status": "success",
+        "message": "Engine triggered. Fetching and applying playbook in the background."
+    })
 
 async def websocket_handler(request):
+    """
+    WS /ws/engine-output
+    Local Websocket endpoint so the frontend (or local GUI) can connect to this engine
+    and watch the evaluation logs stream in real-time.
+    """
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     
-    print(" [WEBSOCKET] Client connected")
+    print(" [WEBSOCKET] Engine Result Viewer Connected")
     connected_clients.add(ws)
     
     try:
         async for msg in ws:
             if msg.type == WSMsgType.TEXT:
-                # Optional: Handle incoming messages from clients if needed
                 pass
             elif msg.type == WSMsgType.ERROR:
                 print(f" [WEBSOCKET] Connection closed with exception {ws.exception()}")
     finally:
         connected_clients.remove(ws)
-        print(" [WEBSOCKET] Client disconnected")
+        print(" [WEBSOCKET] Engine Result Viewer Disconnected")
     
     return ws
 
+def setup_routes(app: web.Application):
+    app.router.add_get('/', handle_health)
+    app.router.add_get('/health', handle_health)
+    app.router.add_get('/api/rules/trigger', trigger_playbook)
+    app.router.add_get('/ws/engine-output', websocket_handler)
+
 async def start_web_server():
+    """Initializes and runs the web server."""
     app = web.Application()
-    app.add_routes([
-        web.get('/', handle_health),
-        web.get('/health', handle_health),
-        web.get('/ws/engine-output', websocket_handler)
-    ])
+    setup_routes(app)
+    
     runner = web.AppRunner(app)
     await runner.setup()
+    
     port = int(os.getenv("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
+    
+    print(f" [SERVER] Starting Orchestrator API on port {port}...")
     await site.start()
-    print(f" [SERVER] Listening on port {port}")
-    return runner
-
-async def main():
-    # 1. Hardware/Provider Setup
-    alpaca_provider = AlpacaAccountProvider(
-        api_key=os.getenv("API_KEY"),
-        api_secret=os.getenv("SECRET_KEY"),
-        paper=True
-    )
     
-    context_builder = ContextBuilder(
-        account_provider=alpaca_provider,
-        user_action_provider=None,
-        global_account_fields=GLOBAL_ACCOUNT_FIELDS
-    )
-
-    # 2. Define Rule (Hardcoded or Parsed)
-    # Using a simple hardcoded rule for "Price > X" to test easily
-    # Or valid LLM parsing if configured. Let's use the parser for realism.
-    llm_client = OpenAILLMClient(model="gpt-4.1")
-    parser = RuleParser(llm_client, category=RuleCategory.ENTRY)
-    
-    user_rule_text = """
-1. Setup Logic (Deterministic Inputs)
-
-Derived State:
-	•	Session VWAP (UTC daily reset)
-	•	20-period EMA
-	•	14-period ATR
-	•	Rolling volatility regime
-	•	Daily realized PnL
-
-⸻
-
-Long Setup
-
-Conditions must ALL be true:
-	1.	Price < VWAP − 1.5 × ATR
-	2.	EMA slope > 0
-	3.	5-min close back above prior candle high
-	4.	Not within 10 minutes of previous stop
-
-⸻
-
-Short Setup
-	1.	Price > VWAP + 1.5 × ATR
-	2.	EMA slope < 0
-	3.	5-min close below prior candle low
-	4.	Not within 10 minutes of previous stop
-
-⸻
-
-2. Entry Rules
-	•	Market order at next candle open.
-	•	Max 1 position at a time.
-	•	No pyramiding.
-	•	No flipping within 5 minutes.
-
-⸻
-
-3. Risk Model
-
-Stop: 1 ATR
-Target: 2 ATR
-Trailing stop activates at +1R
-Max daily loss: 3R
-Max 5 trades per UTC day
-Position size: 1% account risk per trade
-
-⸻
-
-4. Meta Discipline Rules (Where TMOM Shines)
-
-Hard Constraints:
-	•	Block trade if daily loss ≥ 3R
-	•	Block if > 5 trades
-	•	Block if position size > 1% risk
-
-Soft Guardrails:
-	•	Warn if trade taken within 3 minutes of prior close
-	•	Warn if volatility > 95th percentile
-	•	Require justification if third consecutive loss
-
-Cooldown:
-	•	10 minutes after stop loss
-	•	30 minutes after 2 consecutive losses
-"""
-    print(f"Initializing Engine with Rule: '{user_rule_text[:50]}...'")
-    
-    try:
-        playbook, context_skeleton = parser.parse(user_rule_text)
-    except Exception as e:
-        print(f"Failed to parse playbook: {e}")
-        return
-
-    # 3. Start Websockets
-    user_ws_url = "wss://tmom-app-backend.onrender.com/ws/user-activity"
-    market_ws_url = "wss://tmom-app-backend.onrender.com/ws/market-state"
-    # Result URL is now hosted locally
-
-    user_ws = WebSocketClient(user_ws_url)
-
-    # Create tasks
-    print("Starting listeners...")
-    
-    # Start Web Server (Health + WebSocket)
-    web_runner = await start_web_server()
-    
-    task_user = asyncio.create_task(user_ws.listen(user_activity_handler))
-
-    # We choose an ENTRY rule to drive the market engine for this example, 
-    # but in a full system we'd evaluate the entire playbook.
-    entry_rules = playbook.get_rules_by_category(RuleCategory.ENTRY)
-
-    if not entry_rules:
-        print("No ENTRY rule found in playbook.")
-        return
-    
-    # For the simulation/live engine, we pass the entire playbook.
-    task_market = asyncio.create_task(run_market_engine(
-        market_ws_url, 
-        playbook, 
-        context_builder, 
-        context_skeleton
-    ))
-
-
-    # Keep alive
-    try:
-        await asyncio.gather(task_user, task_market)
-    finally:
-        await web_runner.cleanup()
+    # Keep the event loop running forever
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(start_web_server())
     except KeyboardInterrupt:
+        print(" Engine Orchestrator stopped.")
         print("\nEngine stopped.")
