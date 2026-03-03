@@ -1,5 +1,12 @@
 # prompts.py
 import json
+import os
+
+# Load TA-Lib metadata
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_metadata_path = os.path.join(_current_dir, "talib_metadata.json")
+with open(_metadata_path, 'r') as f:
+    TALIB_METADATA = json.load(f)
 
 # Full Alpaca account fields available for rules
 ACCOUNT_FIELDS = [
@@ -166,9 +173,15 @@ You must explicitly list all data required to evaluate the rule.
 - "symbol": The trading pair or ticker symbol if specified (e.g. "BTC/USD", "AAPL").
 - "market_data": List specific raw market indicators needed. MUST be EXACT matches from the provided `MARKET_DATA_FIELDS` list.
 - "ta_lib_metrics": List technical indicators needed. Each must be an object with:
-    - `name`: string representing the TA-Lib function (e.g., 'SMA', 'EMA', 'RSI', 'MACD', 'ATR', 'BBANDS').
+    - `name`: string representing the TA-Lib function. You MUST use EXACTLY one of the keys from the TA-Lib documentation object below.
     - `timeperiod`: integer if specified (e.g., 14 for RSI(14)). Null if not specified.
-    - `params`: object with additional params if needed (e.g. `{{"fastperiod": 12, "slowperiod": 26, "signalperiod": 9}}` for MACD).
+    - `params`: object with additional params if needed, mapped exactly as required by the documentation object below.
+
+--------------------
+TA-LIB CAPABILITIES DOCUMENTATION
+--------------------
+You must ONLY use `name` keys and strict parameters defined in this dictionary:
+{json.dumps(TALIB_METADATA, indent=2)}
 - "account_fields": List EXACT account fields used in the rule (must match the provided list above). If a rule implies checking recent trade history (e.g. "if I took a loss today" or "max 5 trades"), you MUST include the foundational account field that tracking that history would require (e.g. `"equity"`, `"daytrade_count"`, `"portfolio_value"`). Do NOT invent dummy history metrics!
 
 --------------------
