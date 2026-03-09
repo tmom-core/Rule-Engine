@@ -126,3 +126,171 @@ Based on the skeleton above, the frontend must stream the requested `market_data
   "daytrade_count": 2
 }
 ```
+
+---
+
+## 5. TA-Lib Metrics Class Structure
+
+When the LLM requests technical indicators, it uses the `TALibMetricSchema` definition. The frontend team will receive objects structured like this inside the `context_skeleton.ta_lib_metrics` array:
+
+```python
+class TALibMetricSchema(BaseModel):
+    name: str # e.g., 'RSI', 'EMA', 'ATR'
+    timeperiod: Optional[int] = None
+    params: Optional[Dict[str, float]] = None # For additional parameters like MACD fast/slow periods
+```
+
+### Explanation of Fields:
+
+1. **`name` (Required)** 
+   - A strict string matching a valid TA-Lib function (e.g., `"RSI"`, `"MACD"`, `"BBANDS"`). 
+   - The LLM will only output uppercase names that exactly match the supported TA-Lib metadata dictionary.
+   
+2. **`timeperiod` (Optional)** 
+   - An integer representing the lookback period (e.g., `14` for a 14-period RSI). 
+   - Not all indicators use a timeperiod (e.g., MACD uses specific fast/slow periods instead).
+
+3. **`params` (Optional)** 
+   - A dictionary for indicators that require multiple specific configuration parameters.
+   - For example, if the LLM requests the MACD indicator, the frontend might receive:
+     ```json
+     {
+       "name": "MACD",
+       "params": {
+         "fastperiod": 12,
+         "slowperiod": 26,
+         "signalperiod": 9
+       }
+     }
+     ```
+
+### Example of the TA-Lib Metric Dataset Used by LLM
+```json
+"MININDEX": {
+    "group": "Math Operators",
+    "display_name": "Index of lowest value over a specified period",
+    "inputs": {},
+    "parameters": {
+      "timeperiod": 30
+    },
+    "outputs": []
+  },
+  "MINMAX": {
+    "group": "Math Operators",
+    "display_name": "Lowest and highest values over a specified period",
+    "inputs": {},
+    "parameters": {
+      "timeperiod": 30
+    },
+    "outputs": []
+  },
+  "MINMAXINDEX": {
+    "group": "Math Operators",
+    "display_name": "Indexes of lowest and highest values over a specified period",
+    "inputs": {},
+    "parameters": {
+      "timeperiod": 30
+    },
+    "outputs": []
+  },
+  "MULT": {
+    "group": "Math Operators",
+    "display_name": "Vector Arithmetic Mult",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "SUB": {
+    "group": "Math Operators",
+    "display_name": "Vector Arithmetic Subtraction",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "SUM": {
+    "group": "Math Operators",
+    "display_name": "Summation",
+    "inputs": {},
+    "parameters": {
+      "timeperiod": 30
+    },
+    "outputs": []
+  },
+  "ACOS": {
+    "group": "Math Transform",
+    "display_name": "Vector Trigonometric ACos",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "ASIN": {
+    "group": "Math Transform",
+    "display_name": "Vector Trigonometric ASin",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "ATAN": {
+    "group": "Math Transform",
+    "display_name": "Vector Trigonometric ATan",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "CEIL": {
+    "group": "Math Transform",
+    "display_name": "Vector Ceil",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "COS": {
+    "group": "Math Transform",
+    "display_name": "Vector Trigonometric Cos",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "COSH": {
+    "group": "Math Transform",
+    "display_name": "Vector Trigonometric Cosh",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "EXP": {
+    "group": "Math Transform",
+    "display_name": "Vector Arithmetic Exp",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "FLOOR": {
+    "group": "Math Transform",
+    "display_name": "Vector Floor",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "LN": {
+    "group": "Math Transform",
+    "display_name": "Vector Log Natural",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+  "LOG10": {
+    "group": "Math Transform",
+    "display_name": "Vector Log10",
+    "inputs": {},
+    "parameters": {},
+    "outputs": []
+  },
+```
+
+### Constructing the WebSocket Key:
+When the frontend calculates the value for a requested TA-Lib metric, it MUST construct the JSON key for the WebSocket payload using the exact rule:
+* If `timeperiod` is present: `"{name}_{timeperiod}"` (e.g., `"RSI_14"`)
+* If `timeperiod` is absent: `"{name}"` (e.g., `"MACD"`)
+
+The backend engine's evaluator primitives use this specific combined string identifier to look up the indicator value in the market context payload.
