@@ -69,15 +69,20 @@ def comparison_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> boo
                     except Exception as e:
                         pass # Keep right as original string if eval fails
 
-    # Safely try to cast string numbers (like "100000" from Alpaca) to floats
-    # Only try to cast if it's a string avoiding 'bool' or 'None' conversion bugs
-    try:
-        if isinstance(left, str):
-            left = float(left)
-        if isinstance(right, str):
-            right = float(right)
-    except ValueError:
-        pass # If it's a literal string like "VWAP_14" that didn't exist in context, we leave it.
+    # Safely try to cast string numbers (like "100000" from Alpaca or LLM params) to floats
+    # This prevents [EVALUATOR WARNING] Type mismatch: <class 'float'> vs <class 'str'>
+    def safe_to_float(val):
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, str):
+            try:
+                return float(val)
+            except ValueError:
+                pass
+        return val
+
+    left = safe_to_float(left)
+    right = safe_to_float(right)
 
     if type(left) != type(right):
         print(f" [EVALUATOR WARNING] Type mismatch: {type(left)} vs {type(right)} -> {left} {op} {right}")
@@ -139,6 +144,12 @@ def accumulation_evaluator(params: Dict[str, Any], context: Dict[str, Any]) -> b
     op = params.get('op', '>=')
 
     total = context.get(field, 0)
+
+    if isinstance(threshold, str):
+        try:
+            threshold = float(threshold)
+        except ValueError:
+            pass
 
     if op == '>=':
         return total >= threshold
