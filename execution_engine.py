@@ -68,6 +68,12 @@ async def user_activity_handler(msg: str):
     """
     try:
         data = json.loads(msg)
+        
+        if isinstance(data, dict) and data.get("message") == "unauthorized.":
+             print(f" [USER STREAM ERROR] Received explicit 'unauthorized.' payload from backend stream")
+             print(f"                     Full payload dumped: {data}")
+             return
+             
         print(f" [USER ACTION] Manual override detected: {data}")
         state.user_took_action = True
     except Exception as e:
@@ -92,7 +98,16 @@ async def run_market_engine(
     
     async def market_handler(msg: str):
         try:
+            print(" [MARKET] -> Loading JSON message")
             data = json.loads(msg)
+            
+            # Explicitly catch backend unauthorized JSON payloads pushed over an open socket.
+            if isinstance(data, dict) and data.get("message") == "unauthorized.":
+                 print(f" [MARKET ENGINE ERROR] Received explicit 'unauthorized.' payload from backend stream ({ws_url})")
+                 print(f"                       Full payload dumped: {data}")
+                 return
+
+            print(" [MARKET] -> Extracting Base Context")
             
             # 1. Build Base Context from Market Data
             market_context = {}
@@ -103,6 +118,8 @@ async def run_market_engine(
             if "symbol" in data:
                 market_context["symbol"] = data["symbol"]
             
+            print(" [MARKET] -> Extracting TA-Lib Metrics")
+            
             # Retrieve injected TA-Lib metrics from the data stream and add to base context
             if context_skeleton.ta_lib_metrics:
                 for metric in context_skeleton.ta_lib_metrics:
@@ -110,23 +127,33 @@ async def run_market_engine(
                     if key in data:
                         market_context[key] = data[key]
 
+            print(" [MARKET] -> Hydrating Full Context")
+            
             # 2. Hydrate Full Context (fetches account data if needed)
             full_context = context_builder.hydrate(
                 base_context=market_context, 
                 context_skeleton=context_skeleton
             )
 
+            print(" [MARKET] -> Evaluating Playbook")
+            
             # 3. Evaluate Playbook
             playbook_results = playbook.evaluate(full_context)
+            
+            print(" [MARKET] -> Determining Triggers")
             
             # 4. Determine triggers
             entry_triggers = playbook_results.get(RuleCategory.ENTRY, [])
             rule_result = len(entry_triggers) > 0
 
+            print(" [MARKET] -> Checking User Action")
+            
             # 5. User Action & Deviation
             user_action_bool = await state.get_and_reset_user_action()
             deviation = rule_result != user_action_bool
 
+            print(" [MARKET] -> Preparing Output Payload")
+            
             # 6. Output Payload
             output_payload = {
                 "timestamp": market_context.get("current_time"),
@@ -146,6 +173,8 @@ async def run_market_engine(
                 f"DEVIATION: {str(deviation)}"
             )
             
+            print(" [MARKET] -> Broadcasting Payload")
+            
             # Broadcast to all connected WebSocket clients
             if clients_set:
                 for ws in list(clients_set):
@@ -155,7 +184,9 @@ async def run_market_engine(
                         print(f" [RESULT STREAM ERROR] {send_err}")
                         
         except Exception as e:
-            print(f" [MARKET ENGINE ERROR] {e}")
+            import traceback
+            print(f" [MARKET ENGINE CRITICAL ERROR] Failed during market_handler: {e}")
+            traceback.print_exc()
 
     await client.listen(market_handler)
 
